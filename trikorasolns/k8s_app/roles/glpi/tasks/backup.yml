@@ -1,0 +1,91 @@
+---
+- name: "Get pods"
+  kubernetes.core.k8s_info:
+    kind: "Pod"
+    namespace: "{{ k8s_ns }}"
+    kubeconfig: "{{ k8s_config_file }}"
+  register: pod_list
+
+- name: "Build custom Pod information list"
+  set_fact:
+    pod_card_list: "{{ pod_list.resources | json_query(jmesquery) }}"
+  vars:
+    jmesquery: "[*].{MetadataName: metadata.name, MetadataNamespace: metadata.namespace, MetadataOwnerKind: metadata.ownerReferences[0].kind}"
+
+- name: "Print pod card list"
+  debug:
+    msg: "pod_card_list: {{ pod_card_list }}"
+    verbosity: 2
+
+- name: "Print pod list 2"
+  debug:
+    msg: "select pod (filter: {{ item }}): {{ pod_card_list | to_json | from_json | community.general.json_query(item) }}"
+    verbosity: 2
+  with_items:
+    - "[?contains(MetadataName,'glpi-') && MetadataOwnerKind=='ReplicaSet']"
+
+- name: "Fetch mariadb Pod name"
+  set_fact:
+    mariadb_pod_name: "{{ pod_card_list | to_json | from_json | community.general.json_query(jmesquery) | first }}"
+  vars:
+    jmesquery: "[?contains(MetadataName,'mariadb') && MetadataOwnerKind=='StatefulSet'].MetadataName"
+
+- name: "Backup GLPI database"
+  kubernetes.core.k8s_exec:
+    command: "mysqldump -u root glpi"
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ mariadb_pod_name }}"
+  register: mysqldump_res
+
+- name: "Write DB backup to file"
+  copy: 
+    content: "{{ mysqldump_res.stdout }}" 
+    dest: "{{ backup_root_folder }}/{{ k8s_ns }}/{{ backup_file_prefix }}.sql"
+
+- name: "Fetch GLPI Pod name"
+  set_fact:
+    glpi_pod_name: "{{ pod_card_list | to_json | from_json | community.general.json_query(jmesquery) | first }}"
+  vars:
+    jmesquery: "[?contains(MetadataName,'glpi-') && MetadataOwnerKind=='ReplicaSet'].MetadataName"
+
+- name: "Print pod card list"
+  debug:
+    msg: "glpi_pod_name: {{ glpi_pod_name }}"
+    verbosity: 2
+
+- name: "Backup GLPI files"
+  kubernetes.core.k8s_exec:
+    command: "tar --warning=no-file-changed -czvf /tmp/{{ backup_file_prefix }}.files.tgz /var/www/html/files "
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ glpi_pod_name }}"
+  register: glpi_file_bk_res
+
+- name: "Download file backup"
+  kubernetes.core.k8s_cp:
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ glpi_pod_name }}"
+    state: from_pod
+    remote_path: "/tmp/{{ backup_file_prefix }}.files.tgz"
+    local_path: "{{ backup_root_folder }}/{{ k8s_ns }}/{{ backup_file_prefix }}.files.tgz"
+
+- name: "Backup GLPI plugins"
+  kubernetes.core.k8s_exec:
+    command: "tar --warning=no-file-changed -czvf /tmp/{{ backup_file_prefix }}.plugins.tgz /var/www/html/plugins"
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ glpi_pod_name }}"
+  register: glpi_file_bk_res
+
+
+- name: "Download plugin backup"
+  kubernetes.core.k8s_cp:
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ glpi_pod_name }}"
+    state: from_pod
+    remote_path: "/tmp/{{ backup_file_prefix }}.plugins.tgz"
+    local_path: "{{ backup_root_folder }}/{{ k8s_ns }}/{{ backup_file_prefix }}.plugins.tgz"
+...

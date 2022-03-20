@@ -1,0 +1,13 @@
+= Ansible Collection - k8s applications
+:toc: left
+:icons: font
+:description: Ansible collection for maintaining k8s applications.
+
+== Requirements
+
+Installl the following python libraries.
+
+[source, bash]
+----
+$ pip3 install openshift pyyaml kubernetes
+----

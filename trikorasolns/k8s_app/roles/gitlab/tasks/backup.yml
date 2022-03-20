@@ -1,0 +1,84 @@
+---
+- name: "Get pods"
+  kubernetes.core.k8s_info:
+    kind: "Pod"
+    namespace: "{{ k8s_ns }}"
+    kubeconfig: "{{ k8s_config_file }}"
+  register: pod_list
+
+- name: "Build custom Pod information list"
+  set_fact:
+    pod_card_list: "{{ pod_list.resources | json_query(jmesquery) }}"
+  vars:
+    jmesquery: "[*].{MetadataName: metadata.name, MetadataNamespace: metadata.namespace, MetadataOwnerKind: metadata.ownerReferences[0].kind}"
+
+- name: "Print pod card list"
+  debug:
+    msg: "pod_card_list: {{ pod_card_list }}"
+    verbosity: 2
+
+- name: "Print pod list 2"
+  debug:
+    msg: "select pod (filter: {{ item }}): {{ pod_card_list | to_json | from_json | community.general.json_query(item) }}"
+    verbosity: 2
+  with_items:
+    - "[?contains(MetadataName,'glpi-') && MetadataOwnerKind=='ReplicaSet']"
+
+- name: "Fetch Gitlab Pod name"
+  set_fact:
+    gitlab_pod_name: "{{ pod_card_list | to_json | from_json | community.general.json_query(jmesquery) | first }}"
+  vars:
+    jmesquery: "[?contains(MetadataName,'gitlab-') && MetadataOwnerKind=='ReplicaSet'].MetadataName"
+
+- name: "Print pod card list"
+  debug:
+    msg: "gitlab_pod_name: {{ gitlab_pod_name }}"
+    verbosity: 2
+
+- name: "Execute Gitlab Backup"
+  kubernetes.core.k8s_exec:
+    command: "gitlab-backup create"
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ gitlab_pod_name }}"
+
+- name: "Get backup file contents"
+  kubernetes.core.k8s_exec:
+    command: "ls -Art /var/opt/gitlab/backups"
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ gitlab_pod_name }}"
+  register: gitlab_bk_file_name_res
+
+- name: "Print backup file name"
+  debug:
+    msg: "gitlab_bk_file_name_res: {{ gitlab_bk_file_name_res }}"
+    verbosity: 2
+
+- name: "Get latest download file"
+  set_fact:
+    latest_bk_file: "{{ gitlab_bk_file_name_res.stdout_lines | last }}"
+
+- name: "Print backup file name"
+  debug:
+    msg: "latest_bk_file: {{ latest_bk_file }}"
+    verbosity: 2
+
+- name: "Download backup file"
+  kubernetes.core.k8s_cp:
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ gitlab_pod_name }}"
+    state: from_pod
+    remote_path: "/var/opt/gitlab/backups/{{ latest_bk_file }}"
+    local_path: "{{ backup_root_folder }}/{{ k8s_ns }}/{{ latest_bk_file }}"
+
+- name: "Download secrets file"
+  kubernetes.core.k8s_cp:
+    kubeconfig: "{{ k8s_config_file }}"
+    namespace: "{{ k8s_ns }}"
+    pod: "{{ gitlab_pod_name }}"
+    state: from_pod
+    remote_path: "/etc/gitlab/gitlab-secrets.json"
+    local_path: "{{ backup_root_folder }}/{{ k8s_ns }}/{{ latest_bk_file }}-gitlab-secrets.json"
+...

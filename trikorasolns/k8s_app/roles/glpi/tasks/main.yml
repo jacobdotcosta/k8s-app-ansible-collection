@@ -1,0 +1,8 @@
+---
+# tasks file for glpi
+- include_tasks: backup.yml
+  when: (task == "backup")
+
+# - include_tasks: restore.yml
+#   when: (task == "restore")
+...
